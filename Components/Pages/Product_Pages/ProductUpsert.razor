@@ -1,0 +1,256 @@
+@page "/product/create"
+@page "/product/update/{id:int}"
+
+@rendermode InteractiveServer
+
+@inject IProductRepository _productRepository
+@inject ICategoryRepository _categoryRepository
+@inject NavigationManager _navigationManager
+@inject IWebHostEnvironment _webHostEnvironment
+@inject IJSRuntime _JSRuntime
+
+@if (IsProcessing)
+
+{
+    <div class="position-absolute w-75 h-75 d-flex flex-column justify-content-center align-items-center bg-white">
+        <img src="/images/loading.gif" alt="Loading..." />
+    </div>
+}
+else
+{
+    <div class="card-header bg-black bg-gradient ml-0 py-3">
+        <div class="row">
+            <div class="col-12 text-center">
+                <h2 class="text-white py-2 ">@(Id > 0 ? "Update" : "Create") Product</h2>
+            </div>
+        </div>
+        <div class="card-body p-4">
+            <EditForm Model="Product" OnValidSubmit="UpsertProduct">
+                <DataAnnotationsValidator />
+                <ValidationSummary />
+
+                <div class="mb-3">
+                    <label for="productName" class="form-label">Product Name</label>
+                    <InputText id="productName" class="form-control" @bind-Value="Product.Name" />
+                    <ValidationMessage For="@(() => Product.Name)" />
+                </div>
+
+                <div class="mb-3">
+                    <label for="productDescription" class="form-label">Description</label>
+                    <InputTextArea id="productDescription" class="form-control" @bind-Value="Product.Description"
+                        rows="3" />
+                    <ValidationMessage For="@(() => Product.Description)" />
+                </div>
+
+                <div class="mb-3">
+                    <label for="productPrice" class="form-label">Price</label>
+                    <InputNumber id="productPrice" class="form-control" @bind-Value="Product.Price" />
+                    <ValidationMessage For="@(() => Product.Price)" />
+                </div>
+
+                <div class="mb-3">
+                    <label for="productSpecialTag" class="form-label">Special Tag</label>
+                    <InputText id="productSpecialTag" class="form-control" @bind-Value="Product.SpecialTag" />
+                    <ValidationMessage For="@(() => Product.SpecialTag)" />
+                </div>
+
+                <div class="mb-3">
+                    <label for="productCategory" class="form-label">Category</label>
+                    <InputSelect id="productCategory" class="form-select" @bind-Value="Product.CategoryId">
+                        <option value="0">-- Select Category --</option>
+                        @foreach (var category in _categories)
+                        {
+                            <option value="@category.Id">@category.Name</option>
+                        }
+                    </InputSelect>
+                    <ValidationMessage For="@(() => Product.CategoryId)" />
+                </div>
+
+                <div class="mb-3">
+                    <label for="customFile" class="form-label">Product Image</label>
+                    <InputFile OnChange="LoadFiles" id="customFile" class="form-control"
+                        accept="image/png,image/gif,image/jpeg"> </InputFile>
+
+                    @if (!string.IsNullOrEmpty(_previewImageUrl) || !string.IsNullOrEmpty(Product.ImageUrl))
+                    {
+                        <div class="row mt-3">
+                            <div class="col-md-6 col-lg-4">
+                                <img src="@(!string.IsNullOrEmpty(_previewImageUrl) ? _previewImageUrl : Product.ImageUrl)"
+                                    alt="Product Image" class="img-thumbnail"
+                                    style="max-width: 300px; max-height: 300px; object-fit: contain;" />
+                            </div>
+                            <div class="col-md-6 col-lg-8 d-flex align-items-center">
+                                <button type="button" class="btn btn-danger" @onclick="RemoveImage">
+                                    <i class="bi bi-trash"></i> Remove Image
+                                </button>
+                            </div>
+                        </div>
+                    }
+                </div>
+
+                <button type="submit" class="btn btn-lg btn-primary"><i class="bi bi-floppy"></i> @(Id > 0 ? "Update" :
+                                    "Create") Product</button>
+            </EditForm>
+
+
+
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter]
+    public int Id { get; set; }
+
+    private Product Product { get; set; } = new Product();
+
+    private IEnumerable<Category> _categories = new List<Category>();
+    public bool IsProcessing { get; set; } = true;
+
+    private string _directoryPath { get; set; } = string.Empty;
+    private string _previewImageUrl { get; set; } = string.Empty;
+    private IBrowserFile? _selectedFile { get; set; }
+
+    protected override Task OnInitializedAsync()
+    {
+        _directoryPath = Path.Combine(_webHostEnvironment.WebRootPath, "images", "product");
+
+        return base.OnInitializedAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await Task.Delay(1000);
+            await LoadProductAndCategoryList();
+            IsProcessing = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task UpsertProduct()
+    {
+        // Validate category selection
+        if (Product.CategoryId == 0)
+        {
+            await _JSRuntime.ToasterError("Please select a category.");
+            return;
+        }
+
+        IsProcessing = true;
+        StateHasChanged();
+
+        // Ensure the Product.Id is set correctly for updates
+        if (Id > 0)
+        {
+            Product.Id = Id;
+        }
+
+        // Delete old image if updating and a new image was selected
+        if (Id > 0 && _selectedFile != null && !string.IsNullOrEmpty(Product.ImageUrl))
+        {
+            DeleteOldImage(Product.ImageUrl);
+        }
+
+        // Save the file if a new one was selected
+        if (_selectedFile != null)
+        {
+            var file = _selectedFile;
+            FileInfo fileInfo = new FileInfo(file.Name);
+            var newFileName = $"{Guid.NewGuid()}{fileInfo.Extension}";
+
+            if (!Directory.Exists(_directoryPath))
+            {
+                Directory.CreateDirectory(_directoryPath);
+            }
+
+            var filePath = Path.Combine(_directoryPath, newFileName);
+
+            await using FileStream fileStream = new FileStream(filePath, FileMode.Create);
+            await file.OpenReadStream(file.Size).CopyToAsync(fileStream);
+            Product.ImageUrl = $"/images/product/{newFileName}";
+        }
+
+        if (Id > 0)
+        {
+            // Update existing product
+            await _productRepository.UpdateAsync(Product);
+            await _JSRuntime.ToasterSuccess("Product updated successfully.");
+        }
+        else
+        {
+            // Create new product
+            await _productRepository.CreateAsync(Product);
+            await _JSRuntime.ToasterSuccess("Product created successfully.");
+        }
+
+        IsProcessing = false;
+        _navigationManager.NavigateTo("product");
+    }
+
+    private async Task LoadProductAndCategoryList()
+    {
+        if (Id > 0)
+        {
+            Product = await _productRepository.GetAsync(Id);
+        }
+        _categories = await _categoryRepository.GetAllAsync();
+
+        if (Product == null)
+        {
+            Product = new Product();
+        }
+    }
+
+    private async Task LoadFiles(InputFileChangeEventArgs e)
+    {
+        _selectedFile = e.File;
+
+        // Create a preview URL for the image
+        var imageStream = _selectedFile.OpenReadStream(maxAllowedSize: 5 * 1024 * 1024); // 5MB max
+        var imageBytes = new byte[imageStream.Length];
+        await imageStream.ReadAsync(imageBytes);
+        var base64String = Convert.ToBase64String(imageBytes);
+        _previewImageUrl = $"data:{_selectedFile.ContentType};base64,{base64String}";
+
+        StateHasChanged();
+    }
+
+    private void RemoveImage()
+    {
+        if (!string.IsNullOrEmpty(Product.ImageUrl))
+        {
+            // Delete the physical file
+            DeleteOldImage(Product.ImageUrl);
+            Product.ImageUrl = string.Empty;
+        }
+
+        // Clear preview and selected file
+        _previewImageUrl = string.Empty;
+        _selectedFile = null;
+
+        StateHasChanged();
+    }
+
+    private void DeleteOldImage(string imageUrl)
+    {
+        if (string.IsNullOrEmpty(imageUrl)) return;
+
+        try
+        {
+            var fileName = imageUrl.Replace("/images/product/", "");
+            var oldFilePath = Path.Combine(_directoryPath, fileName);
+
+            if (File.Exists(oldFilePath))
+            {
+                File.Delete(oldFilePath);
+            }
+        }
+        catch (Exception)
+        {
+            // Silently handle file deletion errors
+        }
+    }
+
+}
